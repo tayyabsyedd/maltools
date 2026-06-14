@@ -45,7 +45,7 @@ export const BlogProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     useEffect(() => {
         if (postsData) {
-            setPosts(postsData.data);
+            setPosts(postsData.data.posts);
             setLoading(isPostsLoading);
         }
         else if (postsError) {

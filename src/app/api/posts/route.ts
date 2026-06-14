@@ -6,12 +6,17 @@ import slugify from 'slugify';
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const status = searchParams.get('status') || undefined;
+    const status = searchParams.get('status');
+    const categorySlug = searchParams.get('category');
     const page = Number(searchParams.get('page')) || 1;
     const limit = Number(searchParams.get('limit')) || 10;
+    const authorId = searchParams.get('authorId');
 
     const where: any = {};
     if (status) where.status = status;
+    if (categorySlug) where.category = { slug: categorySlug };
+    if (authorId) where.authorId = authorId;
+    if (!status && !authorId) where.status = 'PUBLISHED';
 
     const [posts, total] = await Promise.all([
       prisma.post.findMany({
@@ -20,16 +25,18 @@ export async function GET(req: NextRequest) {
         skip: (page - 1) * limit,
         take: limit,
         include: {
-          author: { select: { name: true, email: true } },
+          author: { select: { id: true, name: true, email: true, avatar: true } },
           category: true,
+          tags: true,
+          _count: { select: { comments: true } },
         },
       }),
       prisma.post.count({ where }),
     ]);
 
-    return NextResponse.json({ success: true, data: { posts, total } });
+    return NextResponse.json({ success: true, data: { posts, total, page, totalPages: Math.ceil(total / limit) } });
   } catch (error) {
-    console.error('GET /api/blog error:', error);
+    console.error('GET /api/posts error:', error);
     return NextResponse.json({ success: false, error: 'Failed to fetch posts' }, { status: 500 });
   }
 }
@@ -42,7 +49,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { title, content, excerpt, ogImage, metaTitle, metaDesc, categoryId, tags, status } = body;
+    const { title, content, excerpt, metaTitle, metaDesc, ogImage, status, categoryId, tags } = body;
 
     if (!title) {
       return NextResponse.json({ success: false, error: 'Title is required' }, { status: 400 });
@@ -54,19 +61,30 @@ export async function POST(req: NextRequest) {
 
     const readTime = content ? Math.max(1, Math.ceil(content.replace(/<[^>]*>/g, '').split(' ').length / 200)) : 0;
 
+    let resolvedCategoryId = categoryId;
+    if (!resolvedCategoryId) {
+      const defaultCat = await prisma.category.findFirst({ select: { id: true } });
+      if (defaultCat) {
+        resolvedCategoryId = defaultCat.id;
+      } else {
+        const newCat = await prisma.category.create({ data: { name: 'Uncategorized', slug: 'uncategorized' } });
+        resolvedCategoryId = newCat.id;
+      }
+    }
+
     const post = await prisma.post.create({
       data: {
         title,
         slug,
         content: content || '',
         excerpt: excerpt || null,
-        ogImage: ogImage || null,
         metaTitle: metaTitle || null,
         metaDesc: metaDesc || null,
+        ogImage: ogImage || null,
         status: status || 'DRAFT',
         readTime,
         authorId: session.user.id,
-        categoryId: categoryId || (await prisma.category.findFirst({ select: { id: true } }))?.id || (await prisma.category.create({ data: { name: 'Uncategorized', slug: 'uncategorized' } })).id,
+        categoryId: resolvedCategoryId,
         ...(tags && {
           tags: {
             connectOrCreate: tags.map((tag: string) => {
@@ -80,7 +98,7 @@ export async function POST(req: NextRequest) {
         }),
       },
       include: {
-        author: { select: { name: true, email: true } },
+        author: { select: { id: true, name: true, email: true } },
         category: true,
         tags: true,
       },
@@ -88,7 +106,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, data: post }, { status: 201 });
   } catch (error) {
-    console.error('POST /api/blog error:', error);
+    console.error('POST /api/posts error:', error);
     return NextResponse.json({ success: false, error: 'Failed to create post' }, { status: 500 });
   }
 }
